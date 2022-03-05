@@ -68,7 +68,7 @@ def downloadSpecificFile(entry, pe_basename, pe_ext, knownPEVersions, output_fol
         print(f'[!] ERROR : Could not download {pe_name} version {version} (URL: {url}).')
         return "KO"
 
-def dowloadPEFileFromMS(pe_basename, pe_ext, knownPEVersions, output_folder):
+def downloadPEFileFromMS(pe_basename, pe_ext, knownPEVersions, output_folder):
     pe_name = f'{pe_basename}.{pe_ext}'
 
     print (f'[*] Downloading {pe_name} files!')
@@ -218,20 +218,25 @@ if __name__ == '__main__':
     
     parser.add_argument('mode', help='ntoskrnl or wdigest. Mode to download and extract offsets for either ntoskrnl or wdigest')
     parser.add_argument('-i', '--input', dest='input', required=True,
-                        help='Single file or directory containing ntoskrnl.exe / wdigest.dll to extract offsets from. If in dowload mode, the PE downloaded from MS symbols servers will be placed in this folder.')
+                        help='Single file or directory containing ntoskrnl.exe / wdigest.dll to extract offsets from. If in download mode, the PE downloaded from MS symbols servers will be placed in this folder.')
     parser.add_argument('-o', '--output', dest='output', 
                         help='CSV file to write offsets to. If the specified file already exists, only new ntoskrnl versions will be downloaded / analyzed. Defaults to NtoskrnlOffsets.csv / WdigestOffsets.csv in the current folder.')
-    parser.add_argument('-d', '--dowload', dest='dowload', action='store_true',
+    parser.add_argument('-d', '--download', dest='download', action='store_true',
                         help='Flag to download the PE from Microsoft servers using list of versions from winbindex.m417z.com.')
     
     args = parser.parse_args()
-    mode = args.mode
+    mode = args.mode.lower()
     if mode not in knownImageVersions:
         print(f'[!] ERROR : unsupported mode "{args.mode}", supported mode are: "ntoskrnl" and "wdigest"')      
         exit(1)
     
     # check R2 version
-    output = run(["r2", "-V"], capture_output=True).stdout.decode()
+    r = run(["r2", "-V"], capture_output=True)
+    if r.returncode != 0:
+        print(f"Error: the following error message was printed while running 'r2 -V':")
+        print(r.stderr)
+        exit(r.returncode)
+    output = r.stdout.decode()
     ma,me,mi = map(int, output.splitlines()[0].split(" ")[0].split("."))
     if (ma, me, mi) < (5,0,0):
         print("WARNING : This script has been tested with radare2 5.0.0 (works) and 4.3.1 (does NOT work)")
@@ -264,14 +269,14 @@ if __name__ == '__main__':
             else:
                 assert False
     # In download mode, an updated list of image versions published will be retrieved from https://winbindex.m417z.com.
-    # The symbols for each version will be dowloaded from the Microsoft symbols servers.
+    # The symbols for each version will be downloaded from the Microsoft symbols servers.
     # Only new versions will be downloaded if the specified output file already contains offsets.
-    if (args.dowload):
+    if (args.download):
         if not os.path.isdir(args.input):
             print('[!] ERROR : in download mode, -i / --input option must specify a folder')
             exit(1)
         extension = extensions_by_mode[mode]
-        dowloadPEFileFromMS(mode, extension, knownImageVersions[mode], args.input)
+        downloadPEFileFromMS(mode, extension, knownImageVersions[mode], args.input)
     
     # Extract the offsets from the specified file or the folders containing image files. 
     extractOffsets(args.input, args.output, mode)
