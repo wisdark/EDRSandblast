@@ -6,10 +6,11 @@
 */
 #include <tchar.h>
 #include <stdio.h>
+#include <shlwapi.h>
 
 #include "FileVersion.h"
+#include "PrintFunctions.h"
 #include "PdbSymbols.h"
-#include "../EDRSandblast.h"
 
 #include "NtoskrnlOffsets.h"
 
@@ -65,7 +66,7 @@ void SaveNtoskrnlOffsetsToFile(TCHAR* ntoskrnlOffsetFilename) {
     for (int i = 0; i < _SUPPORTED_NTOSKRNL_OFFSETS_END; i++) {
         _ftprintf(offsetFileStream, TEXT(",%llx"), g_ntoskrnlOffsets.ar[i]);
     }
-    _fputts(TEXT(""), offsetFileStream);
+    _fputts(TEXT("\n"), offsetFileStream);
 
     fclose(offsetFileStream);
 }
@@ -92,6 +93,7 @@ void LoadNtoskrnlOffsetsFromInternet(BOOL delete_pdb) {
     g_ntoskrnlOffsets.st.psProcessType = GetSymbolOffset(sym_ctx, "PsProcessType");
     g_ntoskrnlOffsets.st.psThreadType = GetSymbolOffset(sym_ctx, "PsThreadType");
     g_ntoskrnlOffsets.st.object_type_callbacklist = GetFieldOffset(sym_ctx, "_OBJECT_TYPE", L"CallbackList");
+    g_ntoskrnlOffsets.st.seCiCallbacks = GetSymbolOffset(sym_ctx, "SeCiCallbacks");
     UnloadSymbols(sym_ctx, delete_pdb);
 }
 
@@ -125,12 +127,10 @@ TCHAR g_ntoskrnlPath[MAX_PATH] = { 0 };
 LPTSTR GetNtoskrnlPath() {
     if (_tcslen(g_ntoskrnlPath) == 0) {
         // Retrieves the system folder (eg C:\Windows\System32).
-        TCHAR systemDirectory[MAX_PATH] = { 0 };
-        GetSystemDirectory(systemDirectory, _countof(systemDirectory));
+        GetSystemDirectory(g_ntoskrnlPath, _countof(g_ntoskrnlPath));
 
         // Compute ntoskrnl.exe path.
-        _tcscat_s(g_ntoskrnlPath, _countof(g_ntoskrnlPath), systemDirectory);
-        _tcscat_s(g_ntoskrnlPath, _countof(g_ntoskrnlPath), TEXT("\\ntoskrnl.exe"));
+        PathAppend(g_ntoskrnlPath, TEXT("\\ntoskrnl.exe"));
     }
     return g_ntoskrnlPath;
 }

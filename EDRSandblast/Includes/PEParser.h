@@ -22,10 +22,17 @@ typedef struct PE_codeview_debug_info_t {
 	CHAR pdbName[1];
 } PE_codeview_debug_info;
 
+typedef VOID(*kernel_read_memory_func) (DWORD64 Address, PVOID Buffer, SIZE_T Size);
+
 typedef struct PE_pointers {
 	BOOL isMemoryMapped;
+	
 	BOOL isInAnotherAddressSpace;
 	HANDLE hProcess;
+	
+	BOOL isInKernelLand;
+	kernel_read_memory_func kernel_read;
+
 	PVOID baseAddress;
 	//headers ptrs
 	IMAGE_DOS_HEADER* dosHeader;
@@ -49,6 +56,7 @@ typedef struct PE_pointers {
 
 PE* PE_create(PVOID imageBase, BOOL isMemoryMapped);
 PE* PE_create_from_another_address_space(HANDLE hProcess, PVOID imageBase);
+PE* PE_create_from_kernel(PVOID imageBase, kernel_read_memory_func ReadPrimitive);
 PVOID PE_RVA_to_Addr(PE* pe, DWORD rva);
 DWORD PE_Addr_to_RVA(PE* pe, PVOID addr);
 IMAGE_SECTION_HEADER* PE_sectionHeader_fromRVA(PE* pe, DWORD rva);
@@ -58,5 +66,5 @@ PVOID PE_functionAddr(PE* pe, LPCSTR functionName);
 VOID PE_parseRelocations(PE* pe);
 VOID PE_rebasePE(PE* pe, LPVOID newBaseAddress);
 PVOID PE_search_pattern(PE* pe, PBYTE pattern, size_t patternSize);
-PVOID PE_search_relative_reference(PE* pe, PVOID target, DWORD relativeReferenceSize);
+DWORD PE_find_static_relative_reference(PE* pe, DWORD targetRVA, DWORD relativeReferenceSize, DWORD fromRVA);
 VOID PE_destroy(PE* pe);

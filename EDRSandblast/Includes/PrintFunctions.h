@@ -1,15 +1,7 @@
 #pragma once
 
-//TODO P1 : implement a "clean" mode that only removes the driver if installed
-//TODO P2 : replace all instances of exit(1) by a clean_exit() function that uninstalls the driver before exiting
-typedef enum _START_MODE {
-    dump,
-    cmd,
-    credguard,
-    audit,
-    firewall,
-    none
-} START_MODE;
+#include <stdio.h>
+#include <tchar.h>
 
 #define NO_STRINGS 0
 

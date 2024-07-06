@@ -5,8 +5,8 @@
 
 #include "DriverRTCore.h"
 #include "DriverDBUtil.h"
+#include "DriverGDRV.h"
 #include "KernelUtils.h"
-#include "../EDRSandblast.h"
 
 #include "KernelMemoryPrimitives.h"
 
@@ -65,5 +65,6 @@ WriteKernelMemoryType(DWORD);
 WriteKernelMemoryType(DWORD64);
 
 BOOL TestReadPrimitive() {
-    return ReadKernelMemoryWORD(0) == *(WORD*)"MZ";
+    WORD startWord = ReadKernelMemoryWORD(0);
+    return ((startWord & 0xFF) == 'M') && ((startWord >> 8) == 'Z');
 }

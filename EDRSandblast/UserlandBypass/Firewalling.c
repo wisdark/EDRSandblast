@@ -3,7 +3,8 @@
 --- Firewall rules to block EDR products from the network (inboud / outbound connections).
 
 */
-#include "../EDRSandblast.h"
+#include "PrintFunctions.h"
+
 #include "Firewalling.h"
 
 HRESULT FirewallBlockEDRBinaries(fwBlockingRulesList* sFWEntries) {
@@ -163,6 +164,10 @@ NTSTATUS EnumEDRServices(fwBlockingRulesList* sFWEntries) {
 
     if (dwError != ERROR_SUCCESS) {
         _tprintf_or_not(TEXT("[!] Could not enumerate EDR services (EnumServicesStatusEx failed: 0x%08lx)\n"), dwError);
+        goto cleanup;
+    }
+    if (dwByteCount * sizeof(BYTE) < lpServicesCount * sizeof(ENUM_SERVICE_STATUS_PROCESS)) {
+        _putts(TEXT("[!] Could not enumerate EDR services (problem in allocation)"));
         goto cleanup;
     }
 

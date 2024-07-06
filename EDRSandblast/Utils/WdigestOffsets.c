@@ -9,15 +9,14 @@
 #include <tchar.h>
 #include <stdio.h>
 
-#include "../EDRSandblast.h"
 #include "FileVersion.h"
 #include "PdbSymbols.h"
+#include "PrintFunctions.h"
 
 #include "WdigestOffsets.h"
 
 union WdigestOffsets g_wdigestOffsets = { 0 };
 
-// Return the offsets of nt!PspCreateProcessNotifyRoutine, nt!PspCreateThreadNotifyRoutine, nt!PspLoadImageNotifyRoutine, and nt!_PS_PROTECTION for the specific Windows version in use.
 void LoadWdigestOffsetsFromFile(TCHAR* wdigestOffsetFilename) {
     LPTSTR wdigestVersion = GetWdigestVersion();
     _tprintf_or_not(TEXT("[*] System's wdigest.dll file version is: %s\n"), wdigestVersion);
@@ -63,7 +62,7 @@ void SaveWdigestOffsetsToFile(TCHAR* wdigestOffsetFilename) {
     for (int i = 0; i < _SUPPORTED_WDIGEST_OFFSETS_END; i++) {
         _ftprintf(offsetFileStream, TEXT(",%llx"), g_wdigestOffsets.ar[i]);
     }
-    _fputts(TEXT(""), offsetFileStream);
+    _fputts(TEXT("\n"), offsetFileStream);
 
     fclose(offsetFileStream);
 }

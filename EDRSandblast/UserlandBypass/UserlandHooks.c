@@ -6,9 +6,9 @@
 #include <shlwapi.h>
 #include <stdio.h>
 
-#include "../EDRSandblast.h"
 #include "FileUtils.h"
 #include "UserlandHooks.h"
+#include "PrintFunctions.h"
 #include "PEBBrowse.h"
 #include "Undoc.h"
 #include "Syscalls.h"
@@ -186,10 +186,12 @@ PVOID searchTrampolineInExecutableMemory(PVOID pattern, size_t patternSize, PVOI
     return NULL;
 }
 
-
-VOID unhook(HOOK* hook, UNHOOK_METHOD unhook_method) {
+/*
+* Returns TRUE iff the hook has been successfully removed
+*/
+BOOL _Check_return_ unhook(_In_ HOOK* hook, UNHOOK_METHOD unhook_method) {
     if (unhook_method == UNHOOK_NONE) {
-        return;
+        return FALSE;
     }
 
     const WCHAR* ntdlolFileName = L".\\ntdlol.txt";
@@ -241,12 +243,12 @@ VOID unhook(HOOK* hook, UNHOOK_METHOD unhook_method) {
         unmonitoredNtProtectVirtualMemory = (pNtProtectVirtualMemory)CreateSyscallStubWithVirtuallAlloc("NtProtectVirtualMemory");
         if (unmonitoredNtProtectVirtualMemory == NULL) {
             printf_or_not("Something wrong happened with CreateSyscallStubWithVirtuallAlloc, aborting...\n");
-            exit(EXIT_FAILURE);
+            return FALSE;
         }
         break;
     default:
         printf_or_not("Unhook method does not exist, exiting...\n");
-        exit(EXIT_FAILURE);
+        return FALSE;
         break;
     }
 
@@ -263,7 +265,7 @@ VOID unhook(HOOK* hook, UNHOOK_METHOD unhook_method) {
     );
     if (!NT_SUCCESS(status)) {
         debugf("unmonitoredNtProtectVirtualMemory 1 failed with status 0x%08x\n", status);
-        exit(1);
+        return FALSE;
     }
 
     for (size_t i = 0; i < patch.size; i++) {
@@ -279,7 +281,7 @@ VOID unhook(HOOK* hook, UNHOOK_METHOD unhook_method) {
     );
     if (!NT_SUCCESS(status)) {
         debugf("unmonitoredNtProtectVirtualMemory 2 failed with status 0x%08x\n", status);
-        exit(1);
+        return FALSE;
     }
 
     switch (unhook_method) {
@@ -291,6 +293,7 @@ VOID unhook(HOOK* hook, UNHOOK_METHOD unhook_method) {
         break;
 
     }
+    return TRUE;
 }
 
 
@@ -421,6 +424,9 @@ _Ret_notnull_ HOOK* searchHooks(const char* csvFileName) {
     for (LDR_DATA_TABLE_ENTRY* currentModuleEntry = getNextModuleEntryInLoadOrder(NULL); currentModuleEntry != NULL; currentModuleEntry = getNextModuleEntryInLoadOrder(currentModuleEntry)) {
         UNICODE_STRING dll_name = currentModuleEntry->BaseDllName;
         if (dll_name.Buffer == NULL) {
+            continue;
+        }
+        if (!_wcsnicmp(dll_name.Buffer, L"api-ms", 6)) {
             continue;
         }
         WCHAR* moduleName = currentModuleEntry->FullDllName.Buffer;

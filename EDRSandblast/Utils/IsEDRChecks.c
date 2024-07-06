@@ -1,4 +1,5 @@
-#include "../EDRSandblast.h"
+#include "PrintFunctions.h"
+
 #include "IsEDRChecks.h"
 
 /*
@@ -41,7 +42,7 @@ TCHAR const* EDR_BINARIES[] = {
    _T("SentinelRemediation.exe"),
    _T("SentinelRemoteShellHost.exe"),
    _T("SentinelScanFromContextMenu.exe"),
-   _T("SentinelServiceHost"),
+   _T("SentinelServiceHost.exe"),
    _T("SentinelStaticEngine.exe"),
    _T("SentinelStaticEngineScanner.exe"),
    _T("SentinelUI.exe"),
@@ -139,6 +140,7 @@ TCHAR const* EDR_DRIVERS[] = {
    _T("Atc.sys"),
    _T("AVC3.SYS"),
    _T("TRUFOS.SYS"),
+   _T("BDSandBox.sys"),
    // Bkav Corporation
    _T("BkavAutoFlt.sys"),
    _T("BkavSdFlt.sys"),
@@ -371,6 +373,9 @@ TCHAR const* EDR_DRIVERS[] = {
    _T("mfencoas.sys"),
    _T("mfehidk.sys"),
    _T("swin.sys"),
+   _T("MfeEEFF.sys"),
+   _T("mfprom.sys"),
+   _T("hdlpflt.sys"),
    // Meidensha Corp
    _T("WhiteShield.sys"),
    // Microsoft
@@ -537,6 +542,7 @@ TCHAR const* EDR_DRIVERS[] = {
    _T("TmEsFlt.sys"),
    _T("TmEyes.sys"),
    _T("tmevtmgr.sys"),
+   _T("TmFileEncDmk.sys"),
    // Verdasys Inc
    _T("STKrnl64.sys"),
    // VisionPower Co.,Ltd.
@@ -581,6 +587,9 @@ TCHAR const* EDR_DRIVERS[] = {
    _T("Qutmdrv.sys"),
    // Absolute Software
    _T("cbfsfilter2017.sys"),
+   _T("psepfilter.sys"),
+   // Absolute Software Corp.
+   _T("cve.sys"),
    // Acronis
    _T("NgScan.sys"),
    // Actifio Inc
@@ -750,8 +759,12 @@ TCHAR const* EDR_DRIVERS[] = {
    // Check Point Software
    _T("epregflt.sys"),
    _T("epklib.sys"),
+   _T("medlpflt.sys"),
+   _T("dsfa.sys"),
+   _T("cposfw.sys"),
    // Checkpoint Software
    _T("cpepmon.sys"),
+   _T("cpbak.sys"),
    // ChemoMetec
    _T("ChemometecFilter.sys"),
    // Cigent Technology Inc
@@ -1476,6 +1489,7 @@ TCHAR const* EDR_DRIVERS[] = {
    _T("symevent.sys"),
    // Symantec Corp.
    _T("diflt.sys"),
+   _T("SISIPSFileFilter.sys"),
    // Syncopate
    _T("thetta.sys"),
    // Systemneeds, Inc
@@ -1627,6 +1641,8 @@ TCHAR const* EDR_DRIVERS[] = {
    _T("ctifile.sys"),
    _T("ctinet.sys"),
    _T("parity.sys"),
+   _T("cbstream.sys"),
+   _T("cbk7.sys"),
    // Cisco
    _T("csacentr.sys"),
    _T("csaenh.sys"),
@@ -1676,6 +1692,7 @@ TCHAR const* EDR_DRIVERS[] = {
    _T("symrg.sys"),
    // Verdasys Inc
    _T("ndgdmk.sys"),
+   _T("dgdmk.sys"),
    /*
    * Invoke-EDRCheck.ps1 - END
    */

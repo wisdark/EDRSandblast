@@ -2,7 +2,7 @@
 #include <Psapi.h>
 #include <Tchar.h>
 
-#include "../EDRSandblast.h"
+#include "PrintFunctions.h"
 
 DWORD64 g_NtoskrnlBaseAddress;
 DWORD64 FindNtoskrnlBaseAddress(void) {
@@ -19,6 +19,31 @@ DWORD64 FindNtoskrnlBaseAddress(void) {
     }
     return g_NtoskrnlBaseAddress;
 }
+
+
+/*
+* Returns the kernel module's base address, given its name
+*/
+DWORD64 FindKernelModuleAddressByName(_In_ LPTSTR name) {
+    LPVOID drivers[1024] = { 0 };
+    DWORD cbNeeded;
+    DWORD cDrivers = 0;
+    TCHAR szDriver[1024] = { 0 };
+
+    if (EnumDeviceDrivers(drivers, sizeof(drivers), &cbNeeded)) {
+        cDrivers = cbNeeded / sizeof(drivers[0]);
+        for (DWORD i = 0; i < cDrivers; i++) {
+            if (drivers[i] && GetDeviceDriverBaseName(drivers[i], szDriver, _countof(szDriver))) {
+                if (_tcsicmp(szDriver, name) == 0) {
+                    return (DWORD64) drivers[i];
+                }
+            }
+        }
+    }
+    _tprintf_or_not(TEXT("[!] Could not resolve %s kernel module's address\n"), name);
+    return 0;
+}
+
 
 /*
 * Returns the name of the driver where "address" seems to be located
@@ -48,6 +73,13 @@ TCHAR* FindDriverName(DWORD64 address, _Out_opt_ PDWORD64 offset) {
     }
     else {
         _tprintf_or_not(TEXT("[!] Could not resolve driver for 0x%I64x, an EDR driver might be missed\n"), address);
+        return NULL;
+    }
+
+    if (minDiff == MAXDWORD64) {
+        if (offset) {
+            *offset = address;
+        }
         return NULL;
     }
 

